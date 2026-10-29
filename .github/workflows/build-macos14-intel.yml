@@ -1,0 +1,92 @@
+name: Sleuth Kit 4.15.0 - macOS 14 Intel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      CC: /usr/bin/clang
+      CXX: /usr/bin/clang++
+      CFLAGS: '-O2 -arch x86_64 -march=x86-64 -mtune=generic -mmacosx-version-min=14.0'
+      CXXFLAGS: '-O2 -arch x86_64 -march=x86-64 -mtune=generic -mmacosx-version-min=14.0'
+      LDFLAGS: '-arch x86_64 -mmacosx-version-min=14.0'
+      PKG_CONFIG: /usr/bin/false
+      LC_ALL: C
+    steps:
+      - name: Download and verify official source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/sleuthkit/sleuthkit/releases/download/sleuthkit-4.15.0/sleuthkit-4.15.0.tar.gz \
+            --output source.tar.gz
+          echo '3a8c1e7d18a9b81f3e5e8aa78313974aceaafc6e051d636bc92cd7168286eca9  source.tar.gz' | shasum -a 256 -c -
+          tar -xzf source.tar.gz
+
+      - name: Build standalone command-line tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir build
+          cd build
+          ../sleuthkit-4.15.0/configure \
+            --prefix="$RUNNER_TEMP/sleuthkit-4.15.0-macos14-intel" \
+            --disable-java --disable-cppunit \
+            --disable-shared --enable-static \
+            --without-afflib --without-libewf --without-libvhdi \
+            --without-libvmdk --without-libvslvm --without-libbfio
+          make -j3
+          make install
+
+      - name: Check architecture, dependencies and ext4 support
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/sleuthkit-4.15.0-macos14-intel"
+          "$package/bin/tsk_recover" -V
+          "$package/bin/fls" -V
+          "$package/bin/fsstat" -f list > supported-filesystems.txt 2>&1 || true
+          grep -q 'ext4' supported-filesystems.txt
+          for tool in tsk_recover fls fsstat; do
+            file "$package/bin/$tool"
+            lipo -verify_arch x86_64 "$package/bin/$tool"
+            otool -L "$package/bin/$tool" | tee "dependencies-$tool.txt"
+            if grep -E '/(opt/homebrew|usr/local|Users/runner|private/tmp|Library/Developer)' "dependencies-$tool.txt"; then
+              echo 'Unexpected non-system dynamic dependency'
+              exit 1
+            fi
+            otool -l "$package/bin/$tool" | grep -A5 LC_BUILD_VERSION
+          done
+          cp supported-filesystems.txt "$package/"
+          cp dependencies-*.txt "$package/"
+          cp -R sleuthkit-4.15.0/licenses "$package/"
+          printf '%s\n' \
+            'Sleuth Kit 4.15.0 CLI, x86_64, deployment target macOS 14.0.' \
+            'Use bin/tsk_recover, bin/fls and bin/fsstat directly after extraction.' \
+            'Built without Java and optional third-party image-format libraries.' \
+            'Local validation on the destination Mac is still required.' > "$package/BUILD-INFO.txt"
+
+      - name: Package and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir artifacts
+          tar -czf artifacts/sleuthkit-4.15.0-macos14-intel.tar.gz \
+            -C "$RUNNER_TEMP" sleuthkit-4.15.0-macos14-intel
+          cd artifacts
+          shasum -a 256 sleuthkit-4.15.0-macos14-intel.tar.gz > SHA256SUMS.txt
+
+      - name: Upload CLI package
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleuthkit-4.15.0-macos14-intel
+          path: artifacts/*
+          retention-days: 7
+          if-no-files-found: error
