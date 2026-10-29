@@ -56,8 +56,8 @@ jobs:
           grep -q 'ext4' supported-filesystems.txt
           for tool in tsk_recover fls fsstat; do
             file "$package/bin/$tool"
-            lipo -verify_arch x86_64 "$package/bin/$tool"
-            otool -L "$package/bin/$tool" | tee "dependencies-$tool.txt"
+            lipo "$package/bin/$tool" -verify_arch x86_64
+            otool -L "$package/bin/$tool" | tail -n +2 | tee "dependencies-$tool.txt"
             if grep -E '/(opt/homebrew|usr/local|Users/runner|private/tmp|Library/Developer)' "dependencies-$tool.txt"; then
               echo 'Unexpected non-system dynamic dependency'
               exit 1
